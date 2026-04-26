@@ -146,7 +146,6 @@ _PORTAL_HTML = """<!doctype html>
       margin-right: 8px;
       animation: spin 0.8s linear infinite;
     }
-    .report { margin-top: 24px; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
@@ -205,12 +204,10 @@ _PORTAL_HTML = """<!doctype html>
       </div>
       <div id="status" class="status"></div>
     </div>
-    <div id="report" class="report"></div>
   </div>
   <script>
     const runBtn = document.getElementById("runBtn");
     const statusEl = document.getElementById("status");
-    const reportEl = document.getElementById("report");
     let pollTimer = null;
 
     function setLoading(loading) {
@@ -220,11 +217,6 @@ _PORTAL_HTML = """<!doctype html>
       } else {
         runBtn.textContent = "Get latest report";
       }
-    }
-
-    function renderReport(html) {
-      if (!html) return;
-      reportEl.innerHTML = html;
     }
 
     async function pollStatus(requestedAt) {
@@ -241,13 +233,13 @@ _PORTAL_HTML = """<!doctype html>
         data.state === "in_progress" ||
         data.state === "pending_discovery"
       ) {
-        statusEl.textContent = "Generating report…";
+        statusEl.textContent = data.phase || "Generating report…";
         return;
       }
       setLoading(false);
       if (data.state === "completed" && data.conclusion === "success") {
-        statusEl.textContent = "Report generated.";
-        renderReport(data.summary_html || "");
+        statusEl.textContent = "Report generated. Opening summary page…";
+        window.location.href = `/summary?requested_at=${req}`;
       } else {
         statusEl.textContent = `Workflow completed with status: ${data.conclusion || "unknown"}`;
       }
@@ -259,7 +251,6 @@ _PORTAL_HTML = """<!doctype html>
 
     runBtn.addEventListener("click", async () => {
       setLoading(true);
-      reportEl.innerHTML = "";
       statusEl.textContent = "Triggering workflow…";
       try {
         const triggerRes = await fetch("/api/workflow/trigger", { method: "POST" });
@@ -277,6 +268,90 @@ _PORTAL_HTML = """<!doctype html>
         setLoading(false);
         statusEl.textContent = "Request failed. Check server logs.";
       }
+    });
+  </script>
+</body>
+</html>
+"""
+
+_SUMMARY_PAGE_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weekly Review Pulse Summary</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+      margin: 0;
+      background: #050b18;
+      color: #cbd6ea;
+    }
+    .wrap { max-width: 980px; margin: 24px auto 40px; padding: 0 16px; }
+    .topbar { margin-bottom: 14px; }
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #9fd9ff;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .status { margin: 8px 0 16px; color: #9fb2d6; min-height: 22px; }
+    .summary-card {
+      background: linear-gradient(180deg, #101a31 0%, #0f1628 100%);
+      border: 1px solid #263753;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, .45);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <a class="back" href="/">← Back</a>
+    </div>
+    <div id="status" class="status">Loading summary…</div>
+    <div id="summary" class="summary-card"></div>
+  </div>
+  <script>
+    const statusEl = document.getElementById("status");
+    const summaryEl = document.getElementById("summary");
+    const requestedAt = new URLSearchParams(window.location.search).get("requested_at");
+
+    async function refresh() {
+      if (!requestedAt) {
+        statusEl.textContent = "Missing requested_at query parameter.";
+        return;
+      }
+      const req = encodeURIComponent(requestedAt);
+      const res = await fetch(`/api/workflow/status?requested_at=${req}`);
+      const data = await res.json();
+      if (!data.ok) {
+        statusEl.textContent = data.error || "Failed to load status.";
+        return;
+      }
+      if (
+        data.state === "queued" ||
+        data.state === "in_progress" ||
+        data.state === "pending_discovery"
+      ) {
+        statusEl.textContent = data.phase || "Generating report…";
+        setTimeout(refresh, 5000);
+        return;
+      }
+      if (data.state === "completed" && data.conclusion === "success") {
+        statusEl.textContent = "Report generated.";
+        summaryEl.innerHTML = data.summary_html || "<p>Summary not found.</p>";
+        return;
+      }
+      statusEl.textContent = `Workflow completed with status: ${data.conclusion || "unknown"}`;
+    }
+
+    refresh().catch(() => {
+      statusEl.textContent = "Request failed. Check server logs.";
     });
   </script>
 </body>
@@ -366,6 +441,65 @@ def _latest_workflow_run(
     return None
 
 
+def _friendly_phase(step_name: str, status_value: str, started_at: datetime | None) -> str:
+    if status_value == "queued":
+        return "Queued in GitHub Actions..."
+    lowered = step_name.lower()
+    if "checkout" in lowered:
+        return "Preparing workflow..."
+    if "setup python" in lowered or "install uv" in lowered:
+        return "Setting up runtime..."
+    if "sync dependencies" in lowered or "cache huggingface" in lowered:
+        return "Installing dependencies..."
+    if "run weekly pulse" in lowered:
+        if started_at is None:
+            return "Running weekly pulse..."
+        elapsed_s = (datetime.now(UTC) - started_at).total_seconds()
+        if elapsed_s < 45:
+            return "Ingesting data..."
+        if elapsed_s < 90:
+            return "Understanding and grouping themes..."
+        if elapsed_s < 140:
+            return "Rendering summary and report..."
+        return "Sending email and updating Google Doc..."
+    if status_value == "in_progress":
+        return "Generating report..."
+    return "Processing workflow..."
+
+
+def _workflow_phase(
+    repo: str,
+    run_id: str,
+    token: str,
+    *,
+    status_value: str,
+    started_at: datetime | None,
+) -> str:
+    if status_value == "queued":
+        return "Queued in GitHub Actions..."
+    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+    response = requests.get(url, headers=_github_headers(token), timeout=30)
+    if response.status_code >= 300:
+        return "Generating report..."
+    payload = response.json()
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    if not isinstance(jobs, list):
+        return "Generating report..."
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("status") or "") == "in_progress":
+                name = str(step.get("name") or "")
+                return _friendly_phase(name, status_value, started_at)
+    return _friendly_phase("", status_value, started_at)
+
+
 def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
     repo = os.environ.get("PULSE_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
     token = os.environ.get("GITHUB_TOKEN") or ""
@@ -393,6 +527,9 @@ def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._html(_PORTAL_HTML)
+                return
+            if parsed.path == "/summary":
+                self._html(_SUMMARY_PAGE_HTML)
                 return
             if parsed.path == "/api/workflow/status":
                 if not repo or not token:
@@ -424,6 +561,14 @@ def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
                     return
                 status_value = str(run.get("status") or "")
                 conclusion = str(run.get("conclusion") or "")
+                run_id = str(run.get("id") or "")
+                started_at_raw = str(run.get("run_started_at") or "")
+                started_at: datetime | None = None
+                if started_at_raw:
+                    try:
+                        started_at = _parse_iso_utc(started_at_raw)
+                    except ValueError:
+                        started_at = None
                 payload: dict[str, object] = {
                     "ok": True,
                     "state": "completed" if status_value == "completed" else status_value,
@@ -431,6 +576,14 @@ def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
                     "run_id": run.get("id"),
                     "run_url": run.get("html_url"),
                 }
+                if run_id:
+                    payload["phase"] = _workflow_phase(
+                        repo,
+                        run_id,
+                        token,
+                        status_value=status_value,
+                        started_at=started_at,
+                    )
                 if status_value == "completed" and conclusion == "success":
                     payload["summary_html"] = _load_summary_html()
                 self._json(payload)
