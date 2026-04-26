@@ -172,6 +172,41 @@ class MCPClient:
                 if isinstance(data, dict):
                     draft_id = str(data.get("draft_id") or data.get("id") or "")
                 return {"draft_id": draft_id or "created"}
+            if name == "gmail_send":
+                recipients = args.get("to")
+                to_value = (
+                    ",".join(str(x) for x in recipients)
+                    if isinstance(recipients, list)
+                    else str(recipients or "")
+                )
+                payload = {
+                    "to": to_value,
+                    "subject": str(args.get("subject") or ""),
+                    "body": str(args.get("text_body") or args.get("html_body") or ""),
+                }
+                # Hosted MCP variants expose different send endpoints.
+                attempts = [
+                    (f"{base}/gmail_send", payload),
+                    (f"{base}/send_email", payload),
+                    (f"{base}/send_email_now", payload),
+                    (f"{base}/create_email_draft", {**payload, "send_now": True}),
+                ]
+                for url, body in attempts:
+                    response = await client.post(url, json=body)
+                    if response.status_code >= 400:
+                        continue
+                    data = response.json()
+                    message_id = ""
+                    if isinstance(data, dict):
+                        message_id = str(
+                            data.get("message_id")
+                            or data.get("sent_id")
+                            or data.get("id")
+                            or data.get("draft_id")
+                            or ""
+                        )
+                    return {"message_id": message_id or "sent"}
+                raise MCPStartupError("Unable to call a compatible send-email endpoint.")
         return None
 
 
