@@ -1,0 +1,23 @@
+run:
+  window_weeks: 12
+  min_reviews: 40
+  top_k_themes: 3
+  token_budget: 250000
+  # "draft" in dev/staging; flip to "send" explicitly for production
+  email_mode: draft
+
+models:
+  embedding: sentence-transformers/all-MiniLM-L6-v2
+  llm: llama-3.3-70b-versatile
+
+mcp:
+  docs:
+    command: "https://saksham-mcp-server-uht7.onrender.com"
+    transport: sse
+  gmail:
+    command: "https://saksham-mcp-server-uht7.onrender.com"
+    transport: sse
+
+stakeholders_default:
+  - name: "Product"
+    email: "product@example.com"

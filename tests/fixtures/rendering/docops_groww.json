@@ -1,0 +1,100 @@
+[
+  {
+    "op": "heading",
+    "level": 1,
+    "text": "Weekly Review Pulse — Groww (2026-W16)",
+    "anchor_id": "pulse-groww-2026-W16"
+  },
+  {
+    "op": "paragraph",
+    "runs": [
+      {
+        "text": "Window: Last 12 weeks  ",
+        "bold": false,
+        "italic": false,
+        "link": null
+      },
+      {
+        "text": "Run ID: 8852a64cd4bb48bd29be2d9cb0ee30b49d18b39b",
+        "bold": false,
+        "italic": true,
+        "link": null
+      }
+    ]
+  },
+  {
+    "op": "hr"
+  },
+  {
+    "op": "heading",
+    "level": 2,
+    "text": "Top themes",
+    "anchor_id": ""
+  },
+  {
+    "op": "paragraph",
+    "runs": [
+      {
+        "text": "1. App *crash* & login",
+        "bold": true,
+        "italic": false,
+        "link": null
+      },
+      {
+        "text": "  [high/high] Users report login-time crashes and freezes.",
+        "bold": false,
+        "italic": false,
+        "link": null
+      }
+    ]
+  },
+  {
+    "op": "paragraph",
+    "runs": [
+      {
+        "text": "Crashes on login block the primary activation path. This risks short-term retention and spikes support load.",
+        "bold": false,
+        "italic": false,
+        "link": null
+      }
+    ]
+  },
+  {
+    "op": "heading",
+    "level": 3,
+    "text": "Real user quotes",
+    "anchor_id": ""
+  },
+  {
+    "op": "bullet_list",
+    "items": [
+      "\"App crashes right after login\" — play_store:groww:1",
+      "\"التطبيق يتعطل بعد تسجيل الدخول\" — play_store:groww:2"
+    ]
+  },
+  {
+    "op": "heading",
+    "level": 3,
+    "text": "Action ideas",
+    "anchor_id": ""
+  },
+  {
+    "op": "bullet_list",
+    "items": [
+      "Patch login crash path — Stabilize auth edge-cases on older devices. Impact: Protects first-week retention."
+    ]
+  },
+  {
+    "op": "heading",
+    "level": 3,
+    "text": "Who this helps",
+    "anchor_id": ""
+  },
+  {
+    "op": "bullet_list",
+    "items": [
+      "Product: Prioritizes a top-funnel reliability bug this sprint.",
+      "Support: Provides a clear known-issue response for login failures."
+    ]
+  }
+]

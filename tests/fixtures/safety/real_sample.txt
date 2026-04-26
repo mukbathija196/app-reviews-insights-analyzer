@@ -1,0 +1,3 @@
+Customer support asked me to email logs to test.user@example.com and call on +91 9876543210.
+Ticket mentions PAN ABCDE1234F and referral URL https://service.test/path?token=qwerty.
+Please do not expose this in reports.

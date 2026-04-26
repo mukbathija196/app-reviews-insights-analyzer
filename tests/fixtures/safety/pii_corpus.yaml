@@ -1,0 +1,27 @@
+- id: email
+  input: "Reach me at user@example.com"
+  expected: "Reach me at [email]"
+
+- id: phone
+  input: "Call +91 9876543210 now"
+  expected: "Call +91 [phone] now"
+
+- id: pan
+  input: "PAN ABCDE1234F was entered"
+  expected: "PAN [pan] was entered"
+
+- id: aadhaar
+  input: "Aadhaar 2345 6789 1234 should be hidden"
+  expected: "Aadhaar [aadhaar] should be hidden"
+
+- id: url_query
+  input: "Open https://site.test/path?token=abc123"
+  expected: "Open [url]"
+
+- id: card_luhn_valid
+  input: "Card 4111 1111 1111 1111 was charged"
+  expected: "Card [card]was charged"
+
+- id: card_luhn_invalid
+  input: "Card 4111 1111 1111 1112 was typed"
+  expected: "Card 4111 1111 1111 1112 was typed"

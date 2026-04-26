@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+
+# uv
+.uv/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Pytest
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data (local cache — not for version control)
+data/runs/
+data/artifacts/
+data/pulse.sqlite
+data/pulse.sqlite-shm
+data/pulse.sqlite-wal
+
+# Environment
+.env
+!.env.example
+
+# macOS
+.DS_Store
+
+# Hugging Face model cache (keep in local cache dir, not repo)
+# ~/.cache/huggingface is the default; nothing to ignore here
+
+# IDE
+.vscode/
+.idea/
+*.swp

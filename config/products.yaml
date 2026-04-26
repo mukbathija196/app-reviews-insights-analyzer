@@ -1,0 +1,14 @@
+groww:
+  display_name: "Groww"
+  doc_title: "Weekly Review Pulse — Groww"
+  doc_url: "https://docs.google.com/document/d/1Xvi2uEY4PePwdb8VWC2Bs9RCSFY_b1OmW0wJNUoIhK8/edit?pli=1&tab=t.0"
+  app_store:
+    country: "in"
+    app_id: "1404871703"
+  play_store:
+    package: "com.nextbillion.groww"
+    lang: "en"
+    country: "in"
+  stakeholders:
+    - name: "Mukbathija"
+      email: "mukbathija@gmail.com"
