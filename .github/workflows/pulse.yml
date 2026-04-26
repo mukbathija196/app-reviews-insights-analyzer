@@ -36,12 +36,12 @@ jobs:
           restore-keys: |
             hf-${{ runner.os }}-
 
-      - name: Run weekly pulse (dry-run default in CI)
+      - name: Run weekly pulse (live MCP delivery in draft mode)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           if [ -n "${{ github.event.inputs.iso_week }}" ]; then
-            uv run pulse run --product groww --iso-week "${{ github.event.inputs.iso_week }}" --dry-run
+            uv run pulse run --product groww --iso-week "${{ github.event.inputs.iso_week }}" --email-mode draft
           else
-            uv run pulse run --product groww --dry-run
+            uv run pulse run --product groww --email-mode draft
           fi

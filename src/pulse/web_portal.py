@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -347,6 +347,10 @@ def _latest_workflow_run(
     runs = data.get("workflow_runs") if isinstance(data, dict) else None
     if not isinstance(runs, list):
         return None
+    # GitHub's run `created_at` can appear slightly earlier than our local
+    # post-dispatch timestamp due to clock skew / API timing. Allow a grace window
+    # so we don't get stuck in pending discovery forever after a successful trigger.
+    threshold = requested_at - timedelta(minutes=5)
     for item in runs:
         if not isinstance(item, dict):
             continue
@@ -357,7 +361,7 @@ def _latest_workflow_run(
             created_at = _parse_iso_utc(created_at_raw)
         except ValueError:
             continue
-        if created_at >= requested_at:
+        if created_at >= threshold:
             return item
     return None
 
