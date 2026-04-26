@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
+from html import escape
+from io import BytesIO
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from zipfile import ZipFile
 
 import requests
 
@@ -306,6 +308,54 @@ _SUMMARY_PAGE_HTML = """<!doctype html>
       padding: 18px;
       box-shadow: 0 18px 45px rgba(0, 0, 0, .45);
     }
+    .summary-wrap h1 { margin: 0 0 6px; color: #f2f6ff; }
+    .summary-wrap h2 { margin-top: 20px; color: #f2f6ff; }
+    .summary-wrap .meta { color: #9fb2d6; margin: 0 0 14px; }
+    .summary-wrap .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .summary-wrap .stats > div {
+      border: 1px solid #253553;
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(255,255,255,.02);
+    }
+    .summary-wrap .label {
+      color: #9fb2d6;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: .08em;
+    }
+    .summary-wrap .value { color: #f2f6ff; font-size: 34px; font-weight: 800; }
+    .summary-wrap .top-theme {
+      margin-top: 12px;
+      border: 1px solid #253553;
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(255,255,255,.02);
+    }
+    .summary-wrap .theme { color: #2ee6ff; font-size: 32px; font-weight: 800; }
+    .summary-wrap .themes { list-style: none; margin: 0; padding: 0; }
+    .summary-wrap .themes li {
+      border-top: 1px solid #253553;
+      padding: 10px 0;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+    }
+    .summary-wrap .t-name { color: #f2f6ff; font-weight: 700; }
+    .summary-wrap .t-count { color: #f2f6ff; font-weight: 700; }
+    .summary-wrap .t-trend {
+      grid-column: 1 / -1;
+      color: #92d6a2;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .summary-wrap .email-note { margin-top: 16px; color: #cbd6ea; }
   </style>
 </head>
 <body>
@@ -364,27 +414,120 @@ def _parse_iso_utc(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _load_summary_html() -> str:
-    summary_path = "/tmp/phase4_preview/index.html"
-    if not os.path.exists(summary_path):
-        return (
-            "<div class='card'><p>No local summary artifact found at "
-            "/tmp/phase4_preview/index.html yet.</p></div>"
-        )
-    with open(summary_path, encoding="utf-8") as f:
-        html = f.read()
-    # Replace CTA with the requested post-generation text.
-    html = re.sub(
-        r"<div class=\"cta\">.*?</div>",
-        (
-            "<p class=\"lede\"><strong>"
-            "The detailed report has been shared to you on your email."
-            "</strong></p>"
-        ),
-        html,
-        flags=re.S,
+def _trend_label(theme: dict[str, object]) -> str:
+    severity = str(theme.get("severity") or "").lower()
+    one_liner = str(theme.get("one_liner") or "").lower()
+    if any(token in one_liner for token in ["crash", "broken", "fail", "error"]):
+        return "Needs Attention"
+    if severity in {"high", "critical"}:
+        return "Needs Attention"
+    if any(token in one_liner for token in ["good", "smooth", "love", "great"]):
+        return "Positive"
+    return "Neutral"
+
+
+def _summary_html_from_run_record(record: dict[str, object]) -> str:
+    report = record.get("report")
+    if not isinstance(report, dict):
+        return "<p>Run record is missing report payload.</p>"
+    metrics = report.get("metrics")
+    if not isinstance(metrics, dict):
+        metrics = {}
+    themes = report.get("themes")
+    theme_items = themes if isinstance(themes, list) else []
+    top_theme = ""
+    if theme_items and isinstance(theme_items[0], dict):
+        top_theme = str(theme_items[0].get("theme_name") or "")
+    reviews_analyzed = str(metrics.get("reviews_analyzed") or metrics.get("reviews_in_window") or "0")
+    avg_rating = str(metrics.get("avg_rating") or "0")
+    iso_week = str(record.get("iso_week") or "")
+    window_label = str(report.get("window_label") or "Last 12 weeks")
+    start = str(metrics.get("reviews_date_start") or "")
+    end = str(metrics.get("reviews_date_end") or "")
+    date_line = f"{iso_week} · {window_label}"
+    if start and end:
+        date_line = f"{date_line} · {start} - {end}"
+
+    lines: list[str] = []
+    lines.append("<div class='summary-wrap'>")
+    lines.append(f"<h1>Weekly Review Pulse: {escape(str(record.get('product') or 'Groww')).title()}</h1>")
+    lines.append(f"<p class='meta'>{escape(date_line)}</p>")
+    lines.append(
+        "<p>Your weekly dose of customer sentiment is here. We analyzed "
+        f"<strong>{escape(reviews_analyzed)}</strong> reviews this week.</p>"
     )
-    return html
+    lines.append("<div class='stats'>")
+    lines.append(
+        "<div><div class='label'>Total Reviews</div>"
+        f"<div class='value'>{escape(reviews_analyzed)}</div></div>"
+    )
+    lines.append(
+        "<div><div class='label'>Avg. Rating</div>"
+        f"<div class='value'>{escape(avg_rating)}</div></div>"
+    )
+    lines.append("</div>")
+    if top_theme:
+        lines.append("<div class='top-theme'><div class='label'>Top sentiment theme</div>")
+        lines.append(f"<div class='theme'>{escape(top_theme)}</div></div>")
+    lines.append("<h2>Top Themes Breakdown</h2>")
+    lines.append("<ul class='themes'>")
+    for item in theme_items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("theme_name") or "")
+        mentions = item.get("n_reviews")
+        trend = _trend_label(item)
+        lines.append(
+            "<li><span class='t-name'>"
+            f"{escape(name)}</span><span class='t-count'>{escape(str(mentions or 0))} mentions</span>"
+            f"<span class='t-trend'>{escape(trend)}</span></li>"
+        )
+    lines.append("</ul>")
+    lines.append(
+        "<p class='email-note'><strong>"
+        "The detailed report has been shared to you on your email."
+        "</strong></p>"
+    )
+    lines.append("</div>")
+    return "".join(lines)
+
+
+def _latest_run_record_from_artifacts(repo: str, run_id: str, token: str) -> dict[str, object] | None:
+    list_url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts"
+    response = requests.get(list_url, headers=_github_headers(token), timeout=30)
+    if response.status_code >= 400:
+        return None
+    payload = response.json()
+    artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+    if not isinstance(artifacts, list):
+        return None
+    preferred = sorted(
+        [a for a in artifacts if isinstance(a, dict)],
+        key=lambda a: str(a.get("created_at") or ""),
+        reverse=True,
+    )
+    for artifact in preferred:
+        name = str(artifact.get("name") or "")
+        if not name.startswith("pulse-run-data-"):
+            continue
+        download_url = str(artifact.get("archive_download_url") or "")
+        if not download_url:
+            continue
+        archive_resp = requests.get(download_url, headers=_github_headers(token), timeout=30)
+        if archive_resp.status_code >= 400:
+            continue
+        with ZipFile(BytesIO(archive_resp.content)) as zf:
+            for member in sorted(zf.namelist(), reverse=True):
+                if not member.endswith(".json"):
+                    continue
+                try:
+                    raw = zf.read(member).decode("utf-8")
+                    parsed = json.loads(raw)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict) and isinstance(parsed.get("report"), dict):
+                    return parsed
+    return None
 
 
 def _github_headers(token: str) -> dict[str, str]:
@@ -585,7 +728,9 @@ def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
                         started_at=started_at,
                     )
                 if status_value == "completed" and conclusion == "success":
-                    payload["summary_html"] = _load_summary_html()
+                    run_record = _latest_run_record_from_artifacts(repo, run_id, token)
+                    if isinstance(run_record, dict):
+                        payload["summary_html"] = _summary_html_from_run_record(run_record)
                 self._json(payload)
                 return
             self.send_error(404, "Not found")

@@ -39,9 +39,18 @@ jobs:
       - name: Run weekly pulse (live MCP delivery in send mode)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PULSE_DATA_DIR: data
         run: |
           if [ -n "${{ github.event.inputs.iso_week }}" ]; then
             uv run pulse run --product groww --iso-week "${{ github.event.inputs.iso_week }}" --email-mode send
           else
             uv run pulse run --product groww --email-mode send
           fi
+
+      - name: Upload run records artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-run-data-${{ github.run_id }}
+          path: data/runs/*.json
+          if-no-files-found: warn
