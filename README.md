@@ -103,10 +103,8 @@ Both are set in `config/pulse.yaml` with `transport: sse`.
 
 ### Weekly doc title policy
 
-- Phase 6 delivery is configured to create/find a dedicated weekly doc title:
-  - `Weekly Review Pulse — Groww — {iso_week}`
-- This requires MCP support for doc create/find APIs.
-- If your MCP only exposes `append_to_doc` with a pre-existing `doc_id`, weekly new-doc mode will fail until the MCP server adds a create/find-doc tool.
+- Each run appends a new dated section to the single running doc set by `doc_url` in `config/products.yaml` (via the MCP `append_to_doc` tool).
+- If a product has no `doc_url`, delivery falls back to create/find-doc by `doc_title`, which requires MCP support for doc create/find APIs.
 
 ### Email mode
 

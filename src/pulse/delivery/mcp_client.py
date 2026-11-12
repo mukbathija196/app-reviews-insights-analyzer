@@ -125,7 +125,8 @@ class MCPClient:
                     )
                 if not doc_id:
                     raise MCPStartupError(
-                        "create_doc did not return a doc_id/id in response payload."
+                        "create_doc did not return a doc_id/id in response payload: "
+                        f"{response.text[:500]}"
                     )
                 return {"doc_id": doc_id}
             if name == "docs_find_heading_anchor":
@@ -146,6 +147,7 @@ class MCPClient:
                     raise MCPStartupError(
                         f"append_to_doc failed with status {response.status_code}: {response.text}"
                     )
+                _raise_on_error_payload("append_to_doc", response)
                 return {"heading_id": f"append-{doc_id}"}
             if name == "gmail_create_draft":
                 recipients = args.get("to")
@@ -167,6 +169,7 @@ class MCPClient:
                         "create_email_draft failed with status "
                         f"{response.status_code}: {response.text}"
                     )
+                _raise_on_error_payload("create_email_draft", response)
                 data = response.json()
                 draft_id = ""
                 if isinstance(data, dict):
@@ -195,6 +198,7 @@ class MCPClient:
                     response = await client.post(url, json=body)
                     if response.status_code >= 400:
                         continue
+                    _raise_on_error_payload("send_email", response)
                     data = response.json()
                     message_id = ""
                     if isinstance(data, dict):
@@ -208,6 +212,16 @@ class MCPClient:
                     return {"message_id": message_id or "sent"}
                 raise MCPStartupError("Unable to call a compatible send-email endpoint.")
         return None
+
+
+def _raise_on_error_payload(tool: str, response: Any) -> None:
+    """Fail loudly when the hosted server reports an error inside a 2xx response."""
+    try:
+        data = response.json()
+    except ValueError:
+        return
+    if isinstance(data, dict) and (data.get("error") or data.get("status") == "error"):
+        raise MCPStartupError(f"{tool} returned an error payload: {response.text[:500]}")
 
 
 def _doc_ops_to_plain_text(doc_ops: object) -> str:

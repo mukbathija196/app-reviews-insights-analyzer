@@ -497,14 +497,14 @@ class Pipeline:
             recipients = [s.email for s in self.product_cfg.stakeholders] or [
                 s.email for s in self.pulse_cfg.stakeholders_default
             ]
-            # Phase 6 policy: create/find a dedicated weekly doc each run.
-            weekly_doc_title = f"{self.product_cfg.doc_title} — {self.spec.iso_week}"
+            # Append each week's section to the product's single running doc.
+            # When products.yaml pins a doc_url, skip create/find entirely.
             result: dict[str, object] = await orchestrator.deliver(
                 run_id=self.spec.run_id,
                 product=self.spec.product,
                 iso_week=self.spec.iso_week,
-                doc_title=weekly_doc_title,
-                doc_id_override=None,
+                doc_title=self.product_cfg.doc_title,
+                doc_id_override=_parse_doc_id(self.product_cfg.doc_url),
                 anchor_id=f"pulse-{self.spec.product}-{self.spec.iso_week}",
                 doc_ops=docops,
                 email=email,
