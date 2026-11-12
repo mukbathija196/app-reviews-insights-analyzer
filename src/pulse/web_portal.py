@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 import os
 from dataclasses import dataclass
@@ -128,7 +127,6 @@ _PORTAL_HTML = """<!doctype html>
       gap: 6px;
     }
     [hidden] { display: none !important; }
-    #keyRow { margin-top: 8px; width: 100%; }
     .email-label { color: var(--title); font-weight: 650; font-size: 16px; }
     .email-input {
       width: 100%;
@@ -239,17 +237,6 @@ _PORTAL_HTML = """<!doctype html>
           placeholder="you@company.com"
           required
         />
-        <div id="keyRow" class="cta-row" hidden>
-          <label class="email-label" for="keyInput">Access code</label>
-          <input
-            id="keyInput"
-            class="email-input"
-            type="password"
-            name="access_code"
-            autocomplete="current-password"
-            placeholder="Shared access code"
-          />
-        </div>
         <button id="runBtn" type="submit">Get latest report</button>
       </form>
       <div id="status" class="status"></div>
@@ -260,32 +247,17 @@ _PORTAL_HTML = """<!doctype html>
     const runForm = document.getElementById("runForm");
     const emailInput = document.getElementById("emailInput");
     const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$/;
-    const keyRow = document.getElementById("keyRow");
-    const keyInput = document.getElementById("keyInput");
-    let keyRequired = false;
     try {
       const saved = localStorage.getItem("pulseEmail");
       if (saved) emailInput.value = saved;
-      const savedKey = localStorage.getItem("pulseKey");
-      if (savedKey) keyInput.value = savedKey;
     } catch (e) {}
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((cfg) => {
-        keyRequired = Boolean(cfg.access_key_required);
-        keyRow.hidden = !keyRequired;
-      })
-      .catch(() => {});
-    function authHeaders(extra) {
-      return Object.assign({ "X-Portal-Key": keyInput.value.trim() }, extra || {});
-    }
+
     const statusEl = document.getElementById("status");
     let pollTimer = null;
 
     function setLoading(loading) {
       runBtn.disabled = loading;
       emailInput.disabled = loading;
-      keyInput.disabled = loading;
       if (loading) {
         runBtn.innerHTML = '<span class="spinner"></span>Generating report';
       } else {
@@ -295,9 +267,7 @@ _PORTAL_HTML = """<!doctype html>
 
     async function pollStatus(requestedAt) {
       const req = encodeURIComponent(requestedAt);
-      const res = await fetch(`/api/workflow/status?requested_at=${req}`, {
-        headers: authHeaders(),
-      });
+      const res = await fetch(`/api/workflow/status?requested_at=${req}`);
       const data = await res.json();
       if (!data.ok) {
         setLoading(false);
@@ -335,21 +305,13 @@ _PORTAL_HTML = """<!doctype html>
         return;
       }
       emailInput.removeAttribute("aria-invalid");
-      if (keyRequired && !keyInput.value.trim()) {
-        statusEl.textContent = "Enter the access code.";
-        keyInput.focus();
-        return;
-      }
-      try {
-        localStorage.setItem("pulseEmail", email);
-        localStorage.setItem("pulseKey", keyInput.value.trim());
-      } catch (e) {}
+      try { localStorage.setItem("pulseEmail", email); } catch (e) {}
       setLoading(true);
       statusEl.textContent = "Triggering workflow…";
       try {
         const triggerRes = await fetch("/api/workflow/trigger", {
           method: "POST",
-          headers: authHeaders({ "Content-Type": "application/json" }),
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email }),
         });
         const triggerData = await triggerRes.json();
@@ -473,11 +435,7 @@ _SUMMARY_PAGE_HTML = """<!doctype html>
         return;
       }
       const req = encodeURIComponent(requestedAt);
-      let key = "";
-      try { key = localStorage.getItem("pulseKey") || ""; } catch (e) {}
-      const res = await fetch(`/api/workflow/status?requested_at=${req}`, {
-        headers: { "X-Portal-Key": key },
-      });
+      const res = await fetch(`/api/workflow/status?requested_at=${req}`);
       const data = await res.json();
       if (!data.ok) {
         statusEl.textContent = data.error || "Failed to load status.";
@@ -751,7 +709,6 @@ class PortalSettings:
     token: str
     workflow_file: str
     ref: str
-    access_key: str
     max_active_runs: int
 
     @classmethod
@@ -765,7 +722,6 @@ class PortalSettings:
             token=os.environ.get("GITHUB_TOKEN") or "",
             workflow_file=os.environ.get("PULSE_WORKFLOW_FILE") or "pulse.yml",
             ref=os.environ.get("PULSE_WORKFLOW_REF") or "main",
-            access_key=os.environ.get("PORTAL_ACCESS_KEY") or "",
             max_active_runs=max(1, max_active),
         )
 
@@ -838,12 +794,6 @@ class PortalHandler(BaseHTTPRequestHandler):
                 status=500,
             )
             return None
-        if settings.access_key and not hmac.compare_digest(
-            (self.headers.get("X-Portal-Key") or "").encode("utf-8"),
-            settings.access_key.encode("utf-8"),
-        ):
-            self._json({"ok": False, "error": "Invalid access code."}, status=401)
-            return None
         return settings
 
     def do_GET(self) -> None:  # noqa: N802
@@ -853,11 +803,6 @@ class PortalHandler(BaseHTTPRequestHandler):
             return
         if path == "/summary":
             self._html(_SUMMARY_PAGE_HTML)
-            return
-        if path == "/api/config":
-            self._json(
-                {"ok": True, "access_key_required": bool(PortalSettings.from_env().access_key)}
-            )
             return
         if path == "/api/workflow/status":
             settings = self._settings_or_error()

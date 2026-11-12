@@ -152,9 +152,8 @@ the pipeline still runs in GitHub Actions and the MCP server on Render.
 2. **Settings → Environment Variables**:
    - `GITHUB_TOKEN` — fine-grained PAT for this repo only, **Actions: Read and write**
    - `PULSE_GITHUB_REPO` — `owner/repo`
-   - `PORTAL_ACCESS_KEY` — shared access code; the trigger and status APIs reject requests without it
    - Optional: `PORTAL_MAX_ACTIVE_RUNS` (default `2`), `PULSE_WORKFLOW_REF`, `PULSE_WORKFLOW_FILE`
-3. Deploy, open the `*.vercel.app` URL, enter the access code and an email, click **Get latest report**.
+3. Deploy, open the `*.vercel.app` URL, enter an email, click **Get latest report**.
 
 ---
 
