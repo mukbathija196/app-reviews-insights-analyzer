@@ -453,10 +453,14 @@ class Pipeline:
             provider="groq",
         )
         stats = ThemeGenerationStats()
+        provider_name = (os.environ.get("LLM_PROVIDER") or "groq").strip().lower()
+        # models.llm in pulse.yaml names a Groq model; other providers keep their defaults.
+        llm_model = self.pulse_cfg.models.llm if provider_name == "groq" else None
         try:
-            provider = get_provider(budget=budget)
+            provider = get_provider(budget=budget, model=llm_model)
             themes = name_themes(clusters, provider=provider, budget=budget, stats=stats)
-        except (ProviderError, BudgetExceeded):  # pragma: no cover - provider/network dependent
+        except (ProviderError, BudgetExceeded) as exc:  # pragma: no cover - provider dependent
+            stats.errors.append(f"{type(exc).__name__}: {exc}")
             themes = []
         reviews_by_id = {r.review_id: r for r in reviews}
         validated = validate_themes(themes, reviews_by_id)
@@ -467,6 +471,10 @@ class Pipeline:
             "themes_before_validate": len(themes),
             "themes_after_validate": len(validated),
             "llm_attempts": stats.attempts,
+            "llm_errors": [e[:300] for e in stats.errors],
+            "llm_rate_limited": stats.rate_limited,
+            "llm_dropped_invalid_json": stats.dropped_invalid_json,
+            "llm_dropped_refusal": stats.dropped_refusal,
         }
         return build_report(
             self.spec,

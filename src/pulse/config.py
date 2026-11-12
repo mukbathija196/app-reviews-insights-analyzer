@@ -85,7 +85,7 @@ class RunConfig(BaseModel):
 
 class ModelsConfig(BaseModel):
     embedding: str = "sentence-transformers/all-MiniLM-L6-v2"
-    llm: str = "llama-3.3-70b-versatile"
+    llm: str = "openai/gpt-oss-120b"
 
 
 class MCPServerConfig(BaseModel):

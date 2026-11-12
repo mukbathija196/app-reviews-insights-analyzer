@@ -147,7 +147,7 @@ class GroqProvider(_BaseProvider):
 
     def __init__(
         self,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "openai/gpt-oss-120b",
         *,
         api_key: str | None = None,
         budget: TokenBudget | None = None,
@@ -177,7 +177,7 @@ class GroqProvider(_BaseProvider):
             ],
             "temperature": 0.1,
             "response_format": {"type": "json_object"},
-            "max_tokens": 1024,
+            "max_tokens": 4096,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -351,7 +351,7 @@ def get_provider(
     if provider_name == "gemini":
         return GeminiProvider(model=model or "gemini-2.5-flash", budget=budget)
     if provider_name == "groq":
-        return GroqProvider(model=model or "llama-3.3-70b-versatile", budget=budget)
+        return GroqProvider(model=model or "openai/gpt-oss-120b", budget=budget)
     if provider_name == "ollama":
         return OllamaProvider(model=model or "llama3.1:8b", budget=budget)
     raise ProviderError(

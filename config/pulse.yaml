@@ -8,7 +8,7 @@ run:
 
 models:
   embedding: sentence-transformers/all-MiniLM-L6-v2
-  llm: llama-3.3-70b-versatile
+  llm: openai/gpt-oss-120b
 
 mcp:
   docs:
