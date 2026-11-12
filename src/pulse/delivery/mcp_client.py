@@ -149,6 +149,25 @@ class MCPClient:
                     )
                 _raise_on_error_payload("append_to_doc", response)
                 return {"heading_id": f"append-{doc_id}"}
+            if name == "docs_replace_content":
+                doc_id = str(args.get("doc_id") or "")
+                content = _doc_ops_to_plain_text(args.get("doc_ops"))
+                response = await client.post(
+                    f"{base}/replace_doc_content",
+                    json={"doc_id": doc_id, "content": content},
+                )
+                if response.status_code == 404:
+                    raise MCPStartupError(
+                        "MCP server has no /replace_doc_content endpoint; deploy the server "
+                        "update or set run.doc_write_mode: append in pulse.yaml."
+                    )
+                if response.status_code >= 400:
+                    raise MCPStartupError(
+                        "replace_doc_content failed with status "
+                        f"{response.status_code}: {response.text}"
+                    )
+                _raise_on_error_payload("replace_doc_content", response)
+                return {"heading_id": f"replace-{doc_id}"}
             if name == "gmail_create_draft":
                 recipients = args.get("to")
                 to_value = (

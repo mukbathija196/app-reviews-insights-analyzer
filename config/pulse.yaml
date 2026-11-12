@@ -5,10 +5,15 @@ run:
   token_budget: 250000
   # "draft" in dev/staging; flip to "send" explicitly for production
   email_mode: draft
+  # replace = the doc shows only the latest run; append = keep a dated section per run
+  doc_write_mode: replace
 
 models:
   embedding: sentence-transformers/all-MiniLM-L6-v2
   llm: openai/gpt-oss-120b
+  # Tried in order when the primary model hits Groq's per-model rate limit.
+  llm_fallback:
+    - openai/gpt-oss-20b
 
 mcp:
   docs:

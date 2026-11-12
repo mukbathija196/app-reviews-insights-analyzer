@@ -52,6 +52,7 @@ class DeliveryOrchestrator:
         email: RenderedEmail,
         email_mode: str = "draft",
         recipients: list[str] | None = None,
+        doc_write_mode: str = "append",
     ) -> dict[str, object]:
         """Run full idempotent delivery sequence; return stable identifiers."""
         headers = {
@@ -65,15 +66,21 @@ class DeliveryOrchestrator:
         else:
             doc_id = str(await self._with_retries(lambda: self.docs.find_or_create_doc(doc_title)))
 
-        # Idempotent section write: check anchor first, append only if missing.
-        existing_heading = await self._with_retries(
-            lambda: self.docs.find_heading_anchor(doc_id, anchor_id)
-        )
-        heading_id = str(existing_heading) if existing_heading else ""
-        if not heading_id:
+        if doc_write_mode == "replace":
+            # The doc only ever holds the latest run, so rewriting it is naturally idempotent.
             heading_id = str(
-                await self._with_retries(lambda: self.docs.append_section(doc_id, doc_ops))
+                await self._with_retries(lambda: self.docs.replace_content(doc_id, doc_ops))
             )
+        else:
+            # Idempotent section write: check anchor first, append only if missing.
+            existing_heading = await self._with_retries(
+                lambda: self.docs.find_heading_anchor(doc_id, anchor_id)
+            )
+            heading_id = str(existing_heading) if existing_heading else ""
+            if not heading_id:
+                heading_id = str(
+                    await self._with_retries(lambda: self.docs.append_section(doc_id, doc_ops))
+                )
         deep_link = str(
             await self._with_retries(lambda: self.docs.get_heading_link(doc_id, heading_id))
         )

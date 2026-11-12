@@ -81,11 +81,16 @@ class RunConfig(BaseModel):
     top_k_themes: int = 3
     token_budget: int = 250_000
     email_mode: Literal["draft", "send"] = "draft"
+    # "append": add a dated section per run (keeps history in the doc).
+    # "replace": erase the doc body and write only the latest run.
+    doc_write_mode: Literal["append", "replace"] = "append"
 
 
 class ModelsConfig(BaseModel):
     embedding: str = "sentence-transformers/all-MiniLM-L6-v2"
     llm: str = "openai/gpt-oss-120b"
+    # Used when the primary Groq model is rate-limited (each model has its own quota).
+    llm_fallback: list[str] = Field(default_factory=lambda: ["openai/gpt-oss-20b"])
 
 
 class MCPServerConfig(BaseModel):

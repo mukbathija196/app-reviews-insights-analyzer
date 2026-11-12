@@ -164,9 +164,16 @@ class GroqProvider(_BaseProvider):
         api_key: str | None = None,
         budget: TokenBudget | None = None,
         endpoint: str = "https://api.groq.com/openai/v1/chat/completions",
+        fallback_models: tuple[str, ...] = (),
+        max_output_tokens: int = 1200,
     ) -> None:
         super().__init__(budget=budget)
         self.model = model
+        # Groq rate limits are per model; on a 429 try these before waiting.
+        self.fallback_models = tuple(m for m in fallback_models if m and m != model)
+        # Groq counts max_tokens against the per-minute token limit up front, so keep it
+        # close to real usage (a theme reply is ~600 tokens).
+        self.max_output_tokens = max_output_tokens
         self._api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not self._api_key:
             raise MissingCredentialsError(
@@ -181,30 +188,44 @@ class GroqProvider(_BaseProvider):
         except ImportError as exc:  # pragma: no cover - hard dependency
             raise ProviderError("httpx required for Groq provider") from exc
 
-        payload: dict[str, object] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-            "max_tokens": 4096,
-        }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        try:
-            response = httpx.post(self.endpoint, headers=headers, json=payload, timeout=60.0)
-        except httpx.HTTPError as exc:
-            raise ProviderUnavailableError(f"Groq network error: {exc}") from exc
-
-        if response.status_code == 429:
+        retry_afters: list[float] = []
+        for model in (self.model, *self.fallback_models):
+            payload: dict[str, object] = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+                "max_tokens": self.max_output_tokens,
+            }
+            if model.startswith("openai/gpt-oss"):
+                # Theme naming needs little deliberation; keeps replies short and fast.
+                payload["reasoning_effort"] = (
+                    os.environ.get("PULSE_LLM_REASONING_EFFORT") or "low"
+                )
+            try:
+                response = httpx.post(
+                    self.endpoint, headers=headers, json=payload, timeout=60.0
+                )
+            except httpx.HTTPError as exc:
+                raise ProviderUnavailableError(f"Groq network error: {exc}") from exc
+            if response.status_code != 429:
+                break
+            retry_after = _retry_after_seconds(response.headers.get("retry-after"))
+            if retry_after is not None:
+                retry_afters.append(retry_after)
+        else:
             raise RateLimitedError(
-                "Groq rate-limited (429)",
-                retry_after_s=_retry_after_seconds(response.headers.get("retry-after")),
+                "Groq rate-limited (429) on all configured models",
+                retry_after_s=min(retry_afters) if retry_afters else None,
             )
+
         if response.status_code >= 500:
             raise ProviderUnavailableError(f"Groq server error: {response.status_code}")
         if response.status_code >= 400:
@@ -356,6 +377,7 @@ def get_provider(
     *,
     budget: TokenBudget | None = None,
     model: str | None = None,
+    fallback_models: tuple[str, ...] = (),
 ) -> LLMProvider:
     """Return an LLMProvider chosen via ``LLM_PROVIDER`` env or ``name`` arg.
 
@@ -366,7 +388,11 @@ def get_provider(
     if provider_name == "gemini":
         return GeminiProvider(model=model or "gemini-2.5-flash", budget=budget)
     if provider_name == "groq":
-        return GroqProvider(model=model or "openai/gpt-oss-120b", budget=budget)
+        return GroqProvider(
+            model=model or "openai/gpt-oss-120b",
+            budget=budget,
+            fallback_models=fallback_models,
+        )
     if provider_name == "ollama":
         return OllamaProvider(model=model or "llama3.1:8b", budget=budget)
     raise ProviderError(

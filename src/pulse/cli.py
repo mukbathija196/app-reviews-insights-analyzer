@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()  # pick up GROQ_API_KEY / LLM_PROVIDER from .env at import time
 
 from pulse.config import load_products, load_pulse_config  # noqa: E402
+from pulse.delivery.recipients import normalize_email  # noqa: E402
 from pulse.ingestion.app_store import AppStoreSource  # noqa: E402
 from pulse.ingestion.base import Review  # noqa: E402
 from pulse.ingestion.normalize import (  # noqa: E402
@@ -106,6 +107,13 @@ def run(
     dry_run: _DRY_RUN_FLAG = False,
     email_mode: _EMAIL_MODE_OPTION = None,
     force: _FORCE_FLAG = False,
+    to: Annotated[
+        str | None,
+        typer.Option(
+            "--to",
+            help="Send the report email to this address instead of the configured stakeholders.",
+        ),
+    ] = None,
 ) -> None:
     """Run the full weekly pulse pipeline for a product.
 
@@ -120,13 +128,14 @@ def run(
             email_mode=email_mode,  # type: ignore[arg-type]
             force=force,
         )
+        recipients = [normalize_email(to)] if to else None
     except (KeyError, ValueError) as exc:
         typer.echo(f"[pulse] Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
     typer.echo(json.dumps(spec.to_dict(), indent=2))
     typer.echo()
-    pipeline = Pipeline(spec)
+    pipeline = Pipeline(spec, recipients=recipients)
     result = asyncio.run(pipeline.execute())
     typer.echo(json.dumps(result.to_dict(), indent=2))
 

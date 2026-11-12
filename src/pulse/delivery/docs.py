@@ -39,6 +39,15 @@ class DocsAdapter:
         data = as_dict(raw)
         return str(data.get("heading_id") or "")
 
+    async def replace_content(self, doc_id: str, doc_ops: DocOps) -> str:
+        """Erase the doc body and write doc_ops as its only content; return heading_id."""
+        raw = await self._client.call_tool(
+            "docs_replace_content",
+            {"doc_id": doc_id, "doc_ops": docops_to_dict(doc_ops)},
+        )
+        data = as_dict(raw)
+        return str(data.get("heading_id") or "")
+
     async def get_heading_link(self, doc_id: str, heading_id: str) -> str:
         """Return the deep-link URL for a heading."""
         raw = await self._client.call_tool(

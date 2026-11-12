@@ -23,6 +23,8 @@ class Recorder:
             return {"heading_id": None}
         if name == "docs_append_section":
             return {"heading_id": "h-1"}
+        if name == "docs_replace_content":
+            return {"heading_id": "h-replace"}
         if name == "docs_get_heading_link":
             return {"url": "https://docs.google.com/document/d/doc-1/edit#heading=h-1"}
         if name == "gmail_search_by_header":
@@ -91,3 +93,28 @@ async def test_gmail_search_before_send() -> None:
     assert "gmail_search_by_header" in names
     assert names.index("gmail_search_by_header") < names.index("gmail_send")
 
+
+
+@pytest.mark.anyio
+async def test_replace_mode_rewrites_doc_without_append() -> None:
+    rec = Recorder()
+    async with MCPClient(command="fake", tool_caller=rec.call) as client:
+        orchestrator = DeliveryOrchestrator(docs=DocsAdapter(client), gmail=GmailAdapter(client))
+        email = RenderedEmail(subject="s", html_body="{{ deep_link }}", text_body="{{ deep_link }}")
+        out = await orchestrator.deliver(
+            run_id="r1",
+            product="groww",
+            iso_week="2026-W16",
+            doc_title="Weekly Review Pulse — Groww",
+            doc_id_override="doc-1",
+            anchor_id="pulse-groww-2026-W16",
+            doc_ops=[],
+            email=email,
+            email_mode="send",
+            doc_write_mode="replace",
+        )
+    names = [name for name, _ in rec.calls]
+    assert "docs_replace_content" in names
+    assert "docs_append_section" not in names
+    assert "docs_find_heading_anchor" not in names
+    assert out["heading_id"] == "h-replace"

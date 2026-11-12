@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import os
-from html import escape
-from io import BytesIO
 from datetime import UTC, datetime, timedelta
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from urllib.parse import parse_qs, urlparse
 from zipfile import ZipFile
 
 import requests
+
+from pulse.delivery.recipients import normalize_email
 
 _PORTAL_HTML = """<!doctype html>
 <html lang="en">
@@ -116,7 +118,28 @@ _PORTAL_HTML = """<!doctype html>
       flex: 0 0 27px;
     }
     .step-text { margin: 0; color: var(--muted); font-size: 18px; line-height: 1.55; }
-    .cta-row { margin-top: 22px; display: flex; justify-content: center; }
+    .cta-row {
+      margin-top: 22px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .email-label { color: var(--title); font-weight: 650; font-size: 16px; }
+    .email-input {
+      width: 100%;
+      max-width: 360px;
+      box-sizing: border-box;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--card-border);
+      background: #0a1222;
+      color: var(--title);
+      font-size: 17px;
+      text-align: center;
+    }
+    .email-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .email-input[aria-invalid="true"] { border-color: #ff6b6b; }
     button {
       margin-top: 14px;
       background: linear-gradient(90deg, var(--accent), #22bfff);
@@ -201,19 +224,37 @@ _PORTAL_HTML = """<!doctype html>
           </p>
         </li>
       </ul>
-      <div class="cta-row">
-        <button id="runBtn">Get latest report</button>
-      </div>
+      <form id="runForm" class="cta-row" novalidate>
+        <label class="email-label" for="emailInput">Where should we send the report?</label>
+        <input
+          id="emailInput"
+          class="email-input"
+          type="email"
+          name="email"
+          autocomplete="email"
+          placeholder="you@company.com"
+          required
+        />
+        <button id="runBtn" type="submit">Get latest report</button>
+      </form>
       <div id="status" class="status"></div>
     </div>
   </div>
   <script>
     const runBtn = document.getElementById("runBtn");
+    const runForm = document.getElementById("runForm");
+    const emailInput = document.getElementById("emailInput");
+    const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$/;
+    try {
+      const saved = localStorage.getItem("pulseEmail");
+      if (saved) emailInput.value = saved;
+    } catch (e) {}
     const statusEl = document.getElementById("status");
     let pollTimer = null;
 
     function setLoading(loading) {
       runBtn.disabled = loading;
+      emailInput.disabled = loading;
       if (loading) {
         runBtn.innerHTML = '<span class="spinner"></span>Generating report';
       } else {
@@ -251,11 +292,25 @@ _PORTAL_HTML = """<!doctype html>
       }
     }
 
-    runBtn.addEventListener("click", async () => {
+    runForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = emailInput.value.trim();
+      if (!EMAIL_RE.test(email)) {
+        emailInput.setAttribute("aria-invalid", "true");
+        statusEl.textContent = "Enter a valid email address to receive the report.";
+        emailInput.focus();
+        return;
+      }
+      emailInput.removeAttribute("aria-invalid");
+      try { localStorage.setItem("pulseEmail", email); } catch (e) {}
       setLoading(true);
       statusEl.textContent = "Triggering workflow…";
       try {
-        const triggerRes = await fetch("/api/workflow/trigger", { method: "POST" });
+        const triggerRes = await fetch("/api/workflow/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
         const triggerData = await triggerRes.json();
         if (!triggerData.ok) {
           setLoading(false);
@@ -485,7 +540,7 @@ def _summary_html_from_run_record(record: dict[str, object]) -> str:
     lines.append("</ul>")
     lines.append(
         "<p class='email-note'><strong>"
-        "The detailed report has been shared to you on your email."
+        "The detailed report has been sent to your email."
         "</strong></p>"
     )
     lines.append("</div>")
@@ -538,9 +593,11 @@ def _github_headers(token: str) -> dict[str, str]:
     }
 
 
-def _trigger_workflow(repo: str, workflow_file: str, ref: str, token: str) -> None:
+def _trigger_workflow(
+    repo: str, workflow_file: str, ref: str, token: str, *, recipient_email: str
+) -> None:
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/dispatches"
-    payload = {"ref": ref, "inputs": {}}
+    payload = {"ref": ref, "inputs": {"recipient_email": recipient_email}}
     response = requests.post(url, headers=_github_headers(token), json=payload, timeout=30)
     if response.status_code >= 300:
         raise RuntimeError(
@@ -750,7 +807,14 @@ def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
                 )
                 return
             try:
-                _trigger_workflow(repo, workflow_file, ref, token)
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(min(length, 4096)) or b"{}")
+                email = normalize_email(str(body.get("email") or ""))
+            except (ValueError, AttributeError):
+                self._json({"ok": False, "error": "Enter a valid email address."}, status=400)
+                return
+            try:
+                _trigger_workflow(repo, workflow_file, ref, token, recipient_email=email)
             except RuntimeError as exc:
                 self._json({"ok": False, "error": str(exc)}, status=502)
                 return

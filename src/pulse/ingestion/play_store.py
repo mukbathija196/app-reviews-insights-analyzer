@@ -22,7 +22,7 @@ class PlayStoreSource(ReviewSource):
         *,
         lang: str = "en",
         country: str = "in",
-        request_pause_s: float = 1.0,
+        request_pause_s: float = 0.25,
         max_batches: int = 20,
         batch_size: int = 200,
     ) -> None:

@@ -129,7 +129,8 @@ Use the webpage flow to trigger report generation only when requested:
    - `pulse portal --host 127.0.0.1 --port 8780`
 2. Open:
    - `http://127.0.0.1:8780`
-3. Click **Get latest report**:
+3. Enter the email address that should receive the report, then click **Get latest report**
+   (the address is passed as the `recipient_email` workflow input and masked in run logs):
    - Button switches to **Generating report**
    - Portal triggers GitHub Actions `workflow_dispatch`
    - On completion, it renders the current summary UI and replaces CTA text with:

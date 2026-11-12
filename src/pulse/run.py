@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -209,8 +210,11 @@ class Pipeline:
         *,
         registry: ProductRegistry | None = None,
         pulse_cfg: PulseConfig | None = None,
+        recipients: list[str] | None = None,
     ) -> None:
         self.spec = spec
+        # When set (e.g. from the portal's email field), replaces the configured stakeholders.
+        self.recipients_override = list(recipients or [])
         self.registry = registry or load_products()
         self.pulse_cfg = pulse_cfg or load_pulse_config()
         self.product_cfg = self.registry.get(spec.product)
@@ -351,6 +355,7 @@ class Pipeline:
 
     def _ingest_window(self, *, warnings: list[str]) -> dict[str, object]:
         from pulse.ingestion.app_store import AppStoreSource
+        from pulse.ingestion.base import RawReview, ReviewSource
         from pulse.ingestion.normalize import content_hash, is_review_eligible, normalize
         from pulse.ingestion.play_store import PlayStoreSource
         from pulse.safety.scrub import scrub
@@ -367,40 +372,53 @@ class Pipeline:
             country=self.product_cfg.play_store.country,
         )
 
+        def _collect(source: ReviewSource) -> tuple[list[RawReview], str]:
+            # Keep whatever was fetched before a failure; report the error as a warning.
+            items: list[RawReview] = []
+            try:
+                for raw in source.fetch(product=self.spec.product, since=since, until=until):
+                    items.append(raw)
+            except Exception as exc:  # pragma: no cover - network dependent
+                return items, str(exc)
+            return items, ""
+
+        # Both stores are network-bound, so fetch them concurrently; DB writes stay serial.
+        sources = {"app_store": app_store, "play_store": play_store}
+        with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+            futures = {name: pool.submit(_collect, src) for name, src in sources.items()}
+            fetched_by_source = {name: fut.result() for name, fut in futures.items()}
+
         out: dict[str, object] = {}
-        for source_name, source in (("app_store", app_store), ("play_store", play_store)):
-            fetched = 0
+        for source_name, (raws, error) in fetched_by_source.items():
+            if error:
+                warnings.append(f"{source_name}_source_unavailable: {error}")
             inserted = 0
             filtered = 0
             latest_cursor: datetime | None = None
-            try:
-                for raw in source.fetch(product=self.spec.product, since=since, until=until):
-                    fetched += 1
-                    review = normalize(raw)
-                    body, _ = scrub(review.body)
-                    title, _ = scrub(review.title or "")
-                    review = replace(
-                        review,
-                        body=body,
-                        title=title or None,
-                        content_hash=content_hash(title or None, body),
-                    )
-                    eligible, _ = is_review_eligible(raw, review)
-                    if not eligible:
-                        filtered += 1
-                        continue
-                    self.store.upsert_raw_review(raw)
-                    if self.store.upsert_review(review):
-                        inserted += 1
-                    if latest_cursor is None or raw.posted_at > latest_cursor:
-                        latest_cursor = raw.posted_at
-            except Exception as exc:  # pragma: no cover - network dependent
-                warnings.append(f"{source_name}_source_unavailable: {exc}")
+            for raw in raws:
+                review = normalize(raw)
+                body, _ = scrub(review.body)
+                title, _ = scrub(review.title or "")
+                review = replace(
+                    review,
+                    body=body,
+                    title=title or None,
+                    content_hash=content_hash(title or None, body),
+                )
+                eligible, _ = is_review_eligible(raw, review)
+                if not eligible:
+                    filtered += 1
+                    continue
+                self.store.upsert_raw_review(raw)
+                if self.store.upsert_review(review):
+                    inserted += 1
+                if latest_cursor is None or raw.posted_at > latest_cursor:
+                    latest_cursor = raw.posted_at
             if latest_cursor is not None:
                 self.store.set_fetch_cursor(
                     self.spec.product, source_name, latest_cursor.isoformat()
                 )
-            out[source_name] = {"fetched": fetched, "inserted": inserted, "filtered": filtered}
+            out[source_name] = {"fetched": len(raws), "inserted": inserted, "filtered": filtered}
         return out
 
     def _reason_report(self) -> Report:
@@ -455,9 +473,11 @@ class Pipeline:
         stats = ThemeGenerationStats()
         provider_name = (os.environ.get("LLM_PROVIDER") or "groq").strip().lower()
         # models.llm in pulse.yaml names a Groq model; other providers keep their defaults.
-        llm_model = self.pulse_cfg.models.llm if provider_name == "groq" else None
+        is_groq = provider_name == "groq"
+        llm_model = self.pulse_cfg.models.llm if is_groq else None
+        fallbacks = tuple(self.pulse_cfg.models.llm_fallback) if is_groq else ()
         try:
-            provider = get_provider(budget=budget, model=llm_model)
+            provider = get_provider(budget=budget, model=llm_model, fallback_models=fallbacks)
             themes = name_themes(clusters, provider=provider, budget=budget, stats=stats)
         except (ProviderError, BudgetExceeded) as exc:  # pragma: no cover - provider dependent
             stats.errors.append(f"{type(exc).__name__}: {exc}")
@@ -488,6 +508,7 @@ class Pipeline:
         from pulse.delivery.gmail import GmailAdapter
         from pulse.delivery.mcp_client import MCPClient
         from pulse.delivery.orchestrator import DeliveryOrchestrator
+        from pulse.delivery.recipients import mask_email
 
         assert self.pulse_cfg.mcp is not None
         docs_client = MCPClient(
@@ -502,9 +523,11 @@ class Pipeline:
             docs = DocsAdapter(docs_client)
             gmail = GmailAdapter(gmail_client)
             orchestrator = DeliveryOrchestrator(docs=docs, gmail=gmail)
-            recipients = [s.email for s in self.product_cfg.stakeholders] or [
-                s.email for s in self.pulse_cfg.stakeholders_default
-            ]
+            recipients = (
+                self.recipients_override
+                or [s.email for s in self.product_cfg.stakeholders]
+                or [s.email for s in self.pulse_cfg.stakeholders_default]
+            )
             # Append each week's section to the product's single running doc.
             # When products.yaml pins a doc_url, skip create/find entirely.
             result: dict[str, object] = await orchestrator.deliver(
@@ -518,8 +541,10 @@ class Pipeline:
                 email=email,
                 email_mode=self.spec.email_mode,
                 recipients=recipients,
+                doc_write_mode=self.pulse_cfg.run.doc_write_mode,
             )
-            result["recipients"] = recipients
+            # Run records are uploaded as workflow artifacts (public repo): mask addresses.
+            result["recipients"] = [mask_email(r) for r in recipients]
             return result
 
     def _write_run_record(self, result: PipelineResult) -> None:
