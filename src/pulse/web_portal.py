@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 from zipfile import ZipFile
 
 import requests
@@ -817,10 +817,15 @@ class PortalHandler(BaseHTTPRequestHandler):
     def _route(self) -> tuple[str, str]:
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
-        # Vercel may expose the rewritten function path; map it back to "/".
+        query = parsed.query
+        # On Vercel the handler sees the rewrite destination (/api/index), not the
+        # requested URL; vercel.json passes the original path as ?__path=.
         if path in ("/api/index", "/api/index.py"):
-            path = "/"
-        return path, parsed.query
+            pairs = parse_qsl(query, keep_blank_values=True)
+            original = next((v for k, v in pairs if k == "__path"), "/")
+            path = original.rstrip("/") or "/"
+            query = urlencode([(k, v) for k, v in pairs if k != "__path"])
+        return path, query
 
     def _settings_or_error(self) -> PortalSettings | None:
         settings = PortalSettings.from_env()
