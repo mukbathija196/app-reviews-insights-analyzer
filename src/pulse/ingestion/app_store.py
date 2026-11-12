@@ -37,7 +37,7 @@ class AppStoreSource(ReviewSource):
         app_id: str,
         country: str = "in",
         *,
-        max_pages: int = 25,
+        max_pages: int = 10,  # Apple's RSS feed serves at most 10 pages
         request_timeout_s: float = 20.0,
         per_page_sleep_s: float = 0.25,
         session: requests.Session | None = None,
@@ -180,7 +180,9 @@ def _parse_entry(
         return None
 
     app_version = _nested(entry, "im:version", "label")
-    lang = _nested(entry, "im:contentType", "attributes", "term") or "en"
+    # The RSS feed carries no review language (im:contentType is the item type,
+    # e.g. "Application"), so leave the hint empty and let text detection decide.
+    lang = ""
 
     posted_at = _as_utc(isoparse(posted))
     fetched_at = datetime.now(UTC)

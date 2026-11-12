@@ -88,9 +88,20 @@ class MissingCredentialsError(ProviderError):
 class RateLimitedError(ProviderError):
     """Raised when the provider returns a 429 after retries."""
 
+    def __init__(self, message: str, retry_after_s: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
 
 class LLMRefusalError(ProviderError):
     """Raised when the model refuses to answer (content-policy trigger)."""
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
 
 
 # ── Provider interface ────────────────────────────────────────────────────────
@@ -127,7 +138,8 @@ class _BaseProvider(ABC):
                 last_error = exc
                 if attempt == 2:
                     raise
-                time.sleep(min(60.0, delay))
+                # Free-tier limits are per minute; honor the provider's Retry-After.
+                time.sleep(min(60.0, max(delay, exc.retry_after_s or 0.0)))
                 delay *= 2
                 continue
 
@@ -189,7 +201,10 @@ class GroqProvider(_BaseProvider):
             raise ProviderUnavailableError(f"Groq network error: {exc}") from exc
 
         if response.status_code == 429:
-            raise RateLimitedError("Groq rate-limited (429)")
+            raise RateLimitedError(
+                "Groq rate-limited (429)",
+                retry_after_s=_retry_after_seconds(response.headers.get("retry-after")),
+            )
         if response.status_code >= 500:
             raise ProviderUnavailableError(f"Groq server error: {response.status_code}")
         if response.status_code >= 400:
