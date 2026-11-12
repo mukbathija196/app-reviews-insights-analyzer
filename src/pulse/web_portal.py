@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -265,10 +267,19 @@ _PORTAL_HTML = """<!doctype html>
       }
     }
 
+    async function readJson(res) {
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        throw new Error(`Server returned HTTP ${res.status} (not JSON).`);
+      }
+    }
+
     async function pollStatus(requestedAt) {
       const req = encodeURIComponent(requestedAt);
       const res = await fetch(`/api/workflow/status?requested_at=${req}`);
-      const data = await res.json();
+      const data = await readJson(res);
       if (!data.ok) {
         setLoading(false);
         statusEl.textContent = data.error || "Status check failed.";
@@ -314,7 +325,7 @@ _PORTAL_HTML = """<!doctype html>
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email }),
         });
-        const triggerData = await triggerRes.json();
+        const triggerData = await readJson(triggerRes);
         if (!triggerData.ok) {
           setLoading(false);
           statusEl.textContent = triggerData.error || "Failed to trigger workflow.";
@@ -326,7 +337,7 @@ _PORTAL_HTML = """<!doctype html>
         await pollStatus(requestedAt);
       } catch (err) {
         setLoading(false);
-        statusEl.textContent = "Request failed. Check server logs.";
+        statusEl.textContent = `Request failed: ${err && err.message ? err.message : err}`;
       }
     });
   </script>
@@ -797,6 +808,23 @@ class PortalHandler(BaseHTTPRequestHandler):
         return settings
 
     def do_GET(self) -> None:  # noqa: N802
+        self._safely(self._handle_get)
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._safely(self._handle_post)
+
+    def _safely(self, fn: Callable[[], None]) -> None:
+        # Unhandled errors would otherwise become an HTML 500 page the UI cannot parse.
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - report every failure as JSON
+            sys.stderr.write(f"portal error: {type(exc).__name__}: {exc}\n")
+            self._json(
+                {"ok": False, "error": f"Server error: {type(exc).__name__}: {exc}"[:300]},
+                status=500,
+            )
+
+    def _handle_get(self) -> None:
         path, query = self._route()
         if path == "/":
             self._html(_PORTAL_HTML)
@@ -863,7 +891,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 payload["summary_html"] = _summary_html_from_run_record(run_record)
         self._json(payload)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def _handle_post(self) -> None:
         path, _ = self._route()
         if path != "/api/workflow/trigger":
             self.send_error(404, "Not found")
