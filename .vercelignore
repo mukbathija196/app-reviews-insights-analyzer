@@ -1,0 +1,17 @@
+# Keep the Vercel deploy to the portal only. Excluding pyproject.toml/uv.lock makes
+# Vercel install requirements.txt (just `requests`) instead of the ML pipeline deps.
+pyproject.toml
+uv.lock
+.venv
+.env
+.env.*
+data
+tests
+docs
+UI
+config
+.github
+.claude
+*.md
+src/pulse/web_portal 2.py
+src/pulse/observability/cleanup 2.py

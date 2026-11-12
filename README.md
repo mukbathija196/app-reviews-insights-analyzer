@@ -142,6 +142,20 @@ Required env vars for portal:
 - `PULSE_GITHUB_REPO` (for example `owner/repo`)
 - Optional: `PULSE_WORKFLOW_REF` (default `main`), `PULSE_WORKFLOW_FILE` (default `pulse.yml`)
 
+### Deploying the portal to Vercel
+
+Only the portal runs on Vercel (`api/index.py`, `vercel.json`, `requirements.txt`);
+the pipeline still runs in GitHub Actions and the MCP server on Render.
+`.vercelignore` keeps `pyproject.toml`/`uv.lock` out so Vercel installs only `requests`.
+
+1. Vercel → **Add New → Project** → import this repo. Framework preset: **Other**, no build command.
+2. **Settings → Environment Variables**:
+   - `GITHUB_TOKEN` — fine-grained PAT for this repo only, **Actions: Read and write**
+   - `PULSE_GITHUB_REPO` — `owner/repo`
+   - `PORTAL_ACCESS_KEY` — shared access code; the trigger and status APIs reject requests without it
+   - Optional: `PORTAL_MAX_ACTIVE_RUNS` (default `2`), `PULSE_WORKFLOW_REF`, `PULSE_WORKFLOW_FILE`
+3. Deploy, open the `*.vercel.app` URL, enter the access code and an email, click **Get latest report**.
+
 ---
 
 ## LLM providers (all free)

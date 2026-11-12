@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -125,6 +127,8 @@ _PORTAL_HTML = """<!doctype html>
       align-items: center;
       gap: 6px;
     }
+    [hidden] { display: none !important; }
+    #keyRow { margin-top: 8px; width: 100%; }
     .email-label { color: var(--title); font-weight: 650; font-size: 16px; }
     .email-input {
       width: 100%;
@@ -235,6 +239,17 @@ _PORTAL_HTML = """<!doctype html>
           placeholder="you@company.com"
           required
         />
+        <div id="keyRow" class="cta-row" hidden>
+          <label class="email-label" for="keyInput">Access code</label>
+          <input
+            id="keyInput"
+            class="email-input"
+            type="password"
+            name="access_code"
+            autocomplete="current-password"
+            placeholder="Shared access code"
+          />
+        </div>
         <button id="runBtn" type="submit">Get latest report</button>
       </form>
       <div id="status" class="status"></div>
@@ -245,16 +260,32 @@ _PORTAL_HTML = """<!doctype html>
     const runForm = document.getElementById("runForm");
     const emailInput = document.getElementById("emailInput");
     const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$/;
+    const keyRow = document.getElementById("keyRow");
+    const keyInput = document.getElementById("keyInput");
+    let keyRequired = false;
     try {
       const saved = localStorage.getItem("pulseEmail");
       if (saved) emailInput.value = saved;
+      const savedKey = localStorage.getItem("pulseKey");
+      if (savedKey) keyInput.value = savedKey;
     } catch (e) {}
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((cfg) => {
+        keyRequired = Boolean(cfg.access_key_required);
+        keyRow.hidden = !keyRequired;
+      })
+      .catch(() => {});
+    function authHeaders(extra) {
+      return Object.assign({ "X-Portal-Key": keyInput.value.trim() }, extra || {});
+    }
     const statusEl = document.getElementById("status");
     let pollTimer = null;
 
     function setLoading(loading) {
       runBtn.disabled = loading;
       emailInput.disabled = loading;
+      keyInput.disabled = loading;
       if (loading) {
         runBtn.innerHTML = '<span class="spinner"></span>Generating report';
       } else {
@@ -264,7 +295,9 @@ _PORTAL_HTML = """<!doctype html>
 
     async function pollStatus(requestedAt) {
       const req = encodeURIComponent(requestedAt);
-      const res = await fetch(`/api/workflow/status?requested_at=${req}`);
+      const res = await fetch(`/api/workflow/status?requested_at=${req}`, {
+        headers: authHeaders(),
+      });
       const data = await res.json();
       if (!data.ok) {
         setLoading(false);
@@ -302,13 +335,21 @@ _PORTAL_HTML = """<!doctype html>
         return;
       }
       emailInput.removeAttribute("aria-invalid");
-      try { localStorage.setItem("pulseEmail", email); } catch (e) {}
+      if (keyRequired && !keyInput.value.trim()) {
+        statusEl.textContent = "Enter the access code.";
+        keyInput.focus();
+        return;
+      }
+      try {
+        localStorage.setItem("pulseEmail", email);
+        localStorage.setItem("pulseKey", keyInput.value.trim());
+      } catch (e) {}
       setLoading(true);
       statusEl.textContent = "Triggering workflow…";
       try {
         const triggerRes = await fetch("/api/workflow/trigger", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ email }),
         });
         const triggerData = await triggerRes.json();
@@ -432,7 +473,11 @@ _SUMMARY_PAGE_HTML = """<!doctype html>
         return;
       }
       const req = encodeURIComponent(requestedAt);
-      const res = await fetch(`/api/workflow/status?requested_at=${req}`);
+      let key = "";
+      try { key = localStorage.getItem("pulseKey") || ""; } catch (e) {}
+      const res = await fetch(`/api/workflow/status?requested_at=${req}`, {
+        headers: { "X-Portal-Key": key },
+      });
       const data = await res.json();
       if (!data.ok) {
         statusEl.textContent = data.error || "Failed to load status.";
@@ -700,131 +745,219 @@ def _workflow_phase(
     return _friendly_phase("", status_value, started_at)
 
 
-def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
-    repo = os.environ.get("PULSE_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""
-    token = os.environ.get("GITHUB_TOKEN") or ""
-    workflow_file = os.environ.get("PULSE_WORKFLOW_FILE") or "pulse.yml"
-    ref = os.environ.get("PULSE_WORKFLOW_REF") or "main"
+@dataclass(frozen=True)
+class PortalSettings:
+    repo: str
+    token: str
+    workflow_file: str
+    ref: str
+    access_key: str
+    max_active_runs: int
 
-    class PortalHandler(BaseHTTPRequestHandler):
-        def _json(self, payload: dict[str, object], status: int = 200) -> None:
-            body = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    @classmethod
+    def from_env(cls) -> PortalSettings:
+        try:
+            max_active = int(os.environ.get("PORTAL_MAX_ACTIVE_RUNS") or 2)
+        except ValueError:
+            max_active = 2
+        return cls(
+            repo=os.environ.get("PULSE_GITHUB_REPO") or os.environ.get("GITHUB_REPOSITORY") or "",
+            token=os.environ.get("GITHUB_TOKEN") or "",
+            workflow_file=os.environ.get("PULSE_WORKFLOW_FILE") or "pulse.yml",
+            ref=os.environ.get("PULSE_WORKFLOW_REF") or "main",
+            access_key=os.environ.get("PORTAL_ACCESS_KEY") or "",
+            max_active_runs=max(1, max_active),
+        )
 
-        def _html(self, html: str, status: int = 200) -> None:
-            body = html.encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
 
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path == "/":
-                self._html(_PORTAL_HTML)
+def _count_active_runs(repo: str, workflow_file: str, token: str) -> int:
+    """Queued + in-progress runs of the workflow (a stateless, global rate limit)."""
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/runs"
+    total = 0
+    for status_value in ("queued", "in_progress"):
+        response = requests.get(
+            url,
+            headers=_github_headers(token),
+            params={"status": status_value, "per_page": 1},
+            timeout=30,
+        )
+        if response.status_code >= 300:
+            raise RuntimeError(
+                f"GitHub workflow status failed ({response.status_code}): {response.text[:200]}"
+            )
+        data = response.json()
+        total += int(data.get("total_count") or 0) if isinstance(data, dict) else 0
+    return total
+
+
+class PortalHandler(BaseHTTPRequestHandler):
+    """Serves the portal pages and API.
+
+    Module-level (not a closure) so serverless hosts such as Vercel can import it;
+    settings are read from the environment on every request.
+    """
+
+    def _json(self, payload: dict[str, object], status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _html(self, html: str, status: int = 200) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _route(self) -> tuple[str, str]:
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        # Vercel may expose the rewritten function path; map it back to "/".
+        if path in ("/api/index", "/api/index.py"):
+            path = "/"
+        return path, parsed.query
+
+    def _settings_or_error(self) -> PortalSettings | None:
+        settings = PortalSettings.from_env()
+        if not settings.repo or not settings.token:
+            self._json(
+                {
+                    "ok": False,
+                    "error": "Missing GITHUB_TOKEN or PULSE_GITHUB_REPO/GITHUB_REPOSITORY.",
+                },
+                status=500,
+            )
+            return None
+        if settings.access_key and not hmac.compare_digest(
+            (self.headers.get("X-Portal-Key") or "").encode("utf-8"),
+            settings.access_key.encode("utf-8"),
+        ):
+            self._json({"ok": False, "error": "Invalid access code."}, status=401)
+            return None
+        return settings
+
+    def do_GET(self) -> None:  # noqa: N802
+        path, query = self._route()
+        if path == "/":
+            self._html(_PORTAL_HTML)
+            return
+        if path == "/summary":
+            self._html(_SUMMARY_PAGE_HTML)
+            return
+        if path == "/api/config":
+            self._json(
+                {"ok": True, "access_key_required": bool(PortalSettings.from_env().access_key)}
+            )
+            return
+        if path == "/api/workflow/status":
+            settings = self._settings_or_error()
+            if settings is None:
                 return
-            if parsed.path == "/summary":
-                self._html(_SUMMARY_PAGE_HTML)
-                return
-            if parsed.path == "/api/workflow/status":
-                if not repo or not token:
-                    self._json(
-                        {
-                            "ok": False,
-                            "error": "Missing GITHUB_TOKEN or PULSE_GITHUB_REPO/GITHUB_REPOSITORY.",
-                        },
-                        status=400,
-                    )
-                    return
-                q = parse_qs(parsed.query)
-                requested_at_raw = str((q.get("requested_at") or [""])[0])
-                if not requested_at_raw:
-                    self._json({"ok": False, "error": "requested_at is required."}, status=400)
-                    return
-                try:
-                    requested_at = _parse_iso_utc(requested_at_raw)
-                except ValueError:
-                    self._json({"ok": False, "error": "Invalid requested_at format."}, status=400)
-                    return
-                try:
-                    run = _latest_workflow_run(repo, workflow_file, token, requested_at)
-                except RuntimeError as exc:
-                    self._json({"ok": False, "error": str(exc)}, status=502)
-                    return
-                if run is None:
-                    self._json({"ok": True, "state": "pending_discovery"})
-                    return
-                status_value = str(run.get("status") or "")
-                conclusion = str(run.get("conclusion") or "")
-                run_id = str(run.get("id") or "")
-                started_at_raw = str(run.get("run_started_at") or "")
-                started_at: datetime | None = None
-                if started_at_raw:
-                    try:
-                        started_at = _parse_iso_utc(started_at_raw)
-                    except ValueError:
-                        started_at = None
-                payload: dict[str, object] = {
-                    "ok": True,
-                    "state": "completed" if status_value == "completed" else status_value,
-                    "conclusion": conclusion,
-                    "run_id": run.get("id"),
-                    "run_url": run.get("html_url"),
-                }
-                if run_id:
-                    payload["phase"] = _workflow_phase(
-                        repo,
-                        run_id,
-                        token,
-                        status_value=status_value,
-                        started_at=started_at,
-                    )
-                if status_value == "completed" and conclusion == "success":
-                    run_record = _latest_run_record_from_artifacts(repo, run_id, token)
-                    if isinstance(run_record, dict):
-                        payload["summary_html"] = _summary_html_from_run_record(run_record)
-                self._json(payload)
-                return
+            self._workflow_status(settings, query)
+            return
+        self.send_error(404, "Not found")
+
+    def _workflow_status(self, settings: PortalSettings, query: str) -> None:
+        repo, token = settings.repo, settings.token
+        q = parse_qs(query)
+        requested_at_raw = str((q.get("requested_at") or [""])[0])
+        if not requested_at_raw:
+            self._json({"ok": False, "error": "requested_at is required."}, status=400)
+            return
+        try:
+            requested_at = _parse_iso_utc(requested_at_raw)
+        except ValueError:
+            self._json({"ok": False, "error": "Invalid requested_at format."}, status=400)
+            return
+        try:
+            run = _latest_workflow_run(repo, settings.workflow_file, token, requested_at)
+        except RuntimeError as exc:
+            self._json({"ok": False, "error": str(exc)}, status=502)
+            return
+        if run is None:
+            self._json({"ok": True, "state": "pending_discovery"})
+            return
+        status_value = str(run.get("status") or "")
+        conclusion = str(run.get("conclusion") or "")
+        run_id = str(run.get("id") or "")
+        started_at_raw = str(run.get("run_started_at") or "")
+        started_at: datetime | None = None
+        if started_at_raw:
+            try:
+                started_at = _parse_iso_utc(started_at_raw)
+            except ValueError:
+                started_at = None
+        payload: dict[str, object] = {
+            "ok": True,
+            "state": "completed" if status_value == "completed" else status_value,
+            "conclusion": conclusion,
+            "run_id": run.get("id"),
+            "run_url": run.get("html_url"),
+        }
+        if run_id:
+            payload["phase"] = _workflow_phase(
+                repo,
+                run_id,
+                token,
+                status_value=status_value,
+                started_at=started_at,
+            )
+        if status_value == "completed" and conclusion == "success":
+            run_record = _latest_run_record_from_artifacts(repo, run_id, token)
+            if isinstance(run_record, dict):
+                payload["summary_html"] = _summary_html_from_run_record(run_record)
+        self._json(payload)
+
+    def do_POST(self) -> None:  # noqa: N802
+        path, _ = self._route()
+        if path != "/api/workflow/trigger":
             self.send_error(404, "Not found")
-
-        def do_POST(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path != "/api/workflow/trigger":
-                self.send_error(404, "Not found")
-                return
-            if not repo or not token:
+            return
+        settings = self._settings_or_error()
+        if settings is None:
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(min(length, 4096)) or b"{}")
+            email = normalize_email(str(body.get("email") or ""))
+        except (ValueError, AttributeError):
+            self._json({"ok": False, "error": "Enter a valid email address."}, status=400)
+            return
+        try:
+            active = _count_active_runs(settings.repo, settings.workflow_file, settings.token)
+            if active >= settings.max_active_runs:
                 self._json(
                     {
                         "ok": False,
-                        "error": "Missing GITHUB_TOKEN or PULSE_GITHUB_REPO/GITHUB_REPOSITORY.",
+                        "error": "A report is already being generated. Try again in a minute.",
                     },
-                    status=400,
+                    status=429,
                 )
                 return
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(min(length, 4096)) or b"{}")
-                email = normalize_email(str(body.get("email") or ""))
-            except (ValueError, AttributeError):
-                self._json({"ok": False, "error": "Enter a valid email address."}, status=400)
-                return
-            try:
-                _trigger_workflow(repo, workflow_file, ref, token, recipient_email=email)
-            except RuntimeError as exc:
-                self._json({"ok": False, "error": str(exc)}, status=502)
-                return
-            self._json({"ok": True, "requested_at": datetime.now(UTC).isoformat()})
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            _trigger_workflow(
+                settings.repo,
+                settings.workflow_file,
+                settings.ref,
+                settings.token,
+                recipient_email=email,
+            )
+        except RuntimeError as exc:
+            self._json({"ok": False, "error": str(exc)}, status=502)
             return
+        self._json({"ok": True, "requested_at": datetime.now(UTC).isoformat()})
 
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+
+def serve_portal(host: str = "127.0.0.1", port: int = 8780) -> None:
     server = ThreadingHTTPServer((host, port), PortalHandler)
     server.serve_forever()
 
 
-__all__ = ["serve_portal"]
+__all__ = ["PortalHandler", "serve_portal"]

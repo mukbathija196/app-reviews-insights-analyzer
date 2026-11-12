@@ -1,0 +1,3 @@
+# Dependencies for the Vercel-hosted portal only (api/index.py).
+# The full pipeline's dependencies live in pyproject.toml and run in GitHub Actions.
+requests>=2.32.0
